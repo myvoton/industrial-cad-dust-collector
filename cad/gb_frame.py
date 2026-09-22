@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""GB 制图模板库 v2 —— 设计院正规出图标准
+"""GB 制图模板库 v3 —— 设计院正规出图标准
 关键纪律: 两套坐标严格分离
   纸面坐标(paper): 图框/标题栏/表格/技术要求 —— 单位 mm, 0..841 x 0..594
   模型坐标(model): 视图几何 —— 真实尺寸 mm, 经 set_view(ox,oy,scale) 变换到纸面
 所有标注(文字/尺寸/箭头)高度均按纸面 mm 固定, 不随比例缩放
+v3新增: 粗糙度/形位公差/基准代号/螺栓圆/带公差尺寸/完整焊接符号
 """
 import math
 import ezdxf
@@ -21,7 +22,7 @@ LEFT, MC, ML, MR = TA.LEFT, TA.MIDDLE_CENTER, TA.MIDDLE_LEFT, TA.MIDDLE_RIGHT
 
 
 class Sheet:
-    def __init__(self, fmt=A1, unit="设计单位", proj="50000m3/h 脉冲布袋除尘器",
+    def __init__(self, fmt=A1, unit="XX环保工程有限公司", proj="50000m3/h 脉冲布袋除尘器",
                  name="", no="", scale="1:20", mat="", wt="", idx=1, total=11,
                  date="2026-09-21"):
         self.W, self.H = fmt
@@ -32,7 +33,6 @@ class Sheet:
         for n, c, lw in _LAYERS:
             self.doc.layers.add(n, color=c, lineweight=lw)
         try:
-            # 长仿宋体: GB 工程字体, Windows/AutoCAD 通用, 渲染预览亦可显示
             self.doc.styles.add("HZ", font="simfang.ttf",
                                 dxfattribs={"height": 0, "width": 0.8})
         except Exception:
@@ -44,20 +44,17 @@ class Sheet:
         self._frame()
         self._title_block(unit, proj, name, no, scale, mat, wt, idx, total, date)
 
-    # ================= 纸面基础 =================
     def _emit_text(self, x, y, s, h, align, layer, rot=0):
         if s in (None, ""):
             return
         e = self.msp.add_text(str(s), height=h,
-                          dxfattribs={"layer": layer, "style": "HZ", "rotation": rot})
+                              dxfattribs={"layer": layer, "style": "HZ", "rotation": rot})
         e.set_placement((x, y), align=align)
 
     def pt(self, x, y, s, h=3.0, align=MC, layer="文字", rot=0):
-        """纸面坐标文字"""
         self._emit_text(x, y, s, h, align, layer, rot)
 
     def pl(self, p1, p2, layer="粗实线", lt=None):
-        """纸面坐标直线"""
         a = {"layer": layer}
         if lt:
             a["linetype"] = lt
@@ -67,7 +64,6 @@ class Sheet:
         self.msp.add_lwpolyline([(x, y), (x + w, y), (x + w, y + h), (x, y + h)],
                                 close=True, dxfattribs={"layer": layer})
 
-    # ================= 图框 / 标题栏 =================
     def _frame(self):
         m, ml, W, H = self.m, self.ml, self.W, self.H
         self.msp.add_lwpolyline([(0, 0), (W, 0), (W, H), (0, H)], close=True,
@@ -89,7 +85,6 @@ class Sheet:
         w = 180.0
         x0 = self.W - self.m - w
         y0 = self.m
-        # 行1: 图名/图号/材料/比例 (高22)
         cws = [70, 40, 35, 35]
         vals = [name, no, mat, scale]
         labs = ["图名", "图号", "材料", "比例"]
@@ -99,7 +94,6 @@ class Sheet:
             self.pt(cx + cws[i] / 2, y0 + 18.5, labs[i], 2.2)
             self.pt(cx + cws[i] / 2, y0 + 9, vals[i], 3.4)
             cx += cws[i]
-        # 行2: 单位(左60) + 设计校对审核工艺批准
         y1 = y0 + 22
         self.prect(x0, y1, w, 12, "表格线")
         self.pt(x0 + 30, y1 + 6, unit, 3.0)
@@ -110,7 +104,6 @@ class Sheet:
             if i:
                 self.pl((cx, y1), (cx, y1 + 12), "表格线")
             self.pt(cx + cw / 2, y1 + 4, lb, 2.4)
-        # 行3: 更改栏
         y2 = y1 + 12
         self.prect(x0, y2, w, 11, "表格线")
         cws3 = [20, 20, 50, 45, 45]
@@ -120,7 +113,6 @@ class Sheet:
             cx += cws3[i]
             if i < 4:
                 self.pl((cx, y2), (cx, y2 + 11), "表格线")
-        # 行4: 重量/张数/日期/项目
         y3 = y2 + 11
         self.prect(x0, y3, w, 11, "表格线")
         cws4 = [30, 25, 25, 40, 60]
@@ -134,9 +126,7 @@ class Sheet:
         self.msp.add_lwpolyline([(x0, y0), (x0 + w, y0), (x0 + w, y3 + 11), (x0, y3 + 11)],
                                 close=True, dxfattribs={"layer": "图框线"})
 
-    # ================= 表格(纸面) =================
     def table(self, x0, y0, cw, header, rows, h=7.0, fs=2.8, title=None):
-        """x0,y0 为表格左下角, 行向上生长, 返回表格顶边 y"""
         w = sum(cw)
         n = len(rows)
         top = y0 + h * (n + 1)
@@ -161,7 +151,6 @@ class Sheet:
         return top
 
     def bom(self, rows, y0=None):
-        """明细栏, 位于标题栏正上方, 宽180"""
         cw = [10, 30, 36, 32, 10, 24, 12, 12, 14]
         header = ["序号", "代号", "名称", "规格", "数量", "材料", "单重", "总重", "备注"]
         x0 = self.W - self.m - 180
@@ -169,7 +158,6 @@ class Sheet:
         return self.table(x0, y0, cw, header, rows, h=7.0, fs=2.5)
 
     def notes(self, x, y, lines, h=3.0, lh=5.4, title="技术要求"):
-        """技术要求(纸面), x,y 为标题行位置, 向下书写"""
         if title:
             self.pt(x, y, title, 4.0, align=ML)
             y -= 6
@@ -177,17 +165,13 @@ class Sheet:
             self.pt(x, y, ln, h, align=ML)
             y -= lh
 
-    # ================= 视图坐标系 =================
     def set_view(self, ox, oy, s):
-        """ox,oy: 模型原点在纸面上的位置(mm); s: 比例(如 1/40)"""
         self.ox, self.oy, self.s = ox, oy, s
 
     def v(self, x, y):
         return (self.ox + x * self.s, self.oy + y * self.s)
 
-    # ================= 模型图元 =================
     def mt(self, x, y, s, h=3.0, align=MC, layer="文字", rot=0):
-        """模型坐标文字(高度为纸面 mm)"""
         px, py = self.v(x, y)
         self._emit_text(px, py, s, h, align, layer, rot)
 
@@ -221,7 +205,6 @@ class Sheet:
         h.set_pattern_fill("ANSI31", scale=scale)
         h.paths.add_polyline_path([self.v(*p) for p in pts], is_closed=True)
 
-    # ================= 尺寸标注 =================
     def _arrow(self, tip, ang, size=2.8):
         a = math.radians(ang)
         p2 = (tip[0] - size * math.cos(a) + size * 0.3 * math.sin(a),
@@ -231,7 +214,6 @@ class Sheet:
         self.msp.add_solid([tip, p2, p3], dxfattribs={"layer": "尺寸线"})
 
     def dim_h(self, x1, x2, y, d=10.0, txt=None):
-        """水平尺寸, d>0 尺寸线在 y 下方 d(mm纸面), d<0 在上方"""
         px1, py = self.v(x1, y)
         px2, _ = self.v(x2, y)
         s = -1.0 if d > 0 else 1.0
@@ -246,7 +228,6 @@ class Sheet:
         self.pt((px1 + px2) / 2, yl + 1.8, v, 2.8)
 
     def dim_v(self, y1, y2, x, d=10.0, txt=None):
-        """垂直尺寸, d>0 尺寸线在 x 左侧 d(mm纸面), d<0 在右侧"""
         px, py1 = self.v(x, y1)
         _, py2 = self.v(x, y2)
         s = -1.0 if d > 0 else 1.0
@@ -261,7 +242,6 @@ class Sheet:
         self.pt(xl - 1.8, (py1 + py2) / 2, v, 2.8, align=MR)
 
     def chain_h(self, xs, y, d=10.0):
-        """水平尺寸链: 连续分段, 共用一条尺寸线"""
         s = -1.0 if d > 0 else 1.0
         py = self.v(0, y)[1]
         yl = py + s * abs(d)
@@ -278,9 +258,7 @@ class Sheet:
         for i in range(len(xs) - 1):
             self.pt((pxs[i] + pxs[i + 1]) / 2, yl + 1.8, f"{xs[i + 1] - xs[i]:.0f}", 2.4)
 
-    # ================= 序号 / 引出 / 焊缝 / 剖切 =================
     def balloon(self, no, x, y, tx, ty, r=3.6):
-        """件号: 指引线 + 起点圆点 + 序号圆(坐标均为模型)"""
         px, py = self.v(x, y)
         qx, qy = self.v(tx, ty)
         self.msp.add_line((px, py), (qx, qy), dxfattribs={"layer": "引线"})
@@ -290,7 +268,6 @@ class Sheet:
         self.pt(qx, qy, str(no), 2.8)
 
     def leader(self, x, y, tx, ty, txt, h=2.8):
-        """引出标注(模型坐标): 自动判断左右方向"""
         px, py = self.v(x, y)
         qx, qy = self.v(tx, ty)
         self.msp.add_line((px, py), (qx, qy), dxfattribs={"layer": "引线"})
@@ -302,7 +279,6 @@ class Sheet:
             self.pt(qx - 7, qy + 1.0, txt, h, align=MR)
 
     def weld(self, x, y, k):
-        """简化焊接符号(模型坐标)"""
         px, py = self.v(x, y)
         self.msp.add_lwpolyline([(px, py), (px - 5, py + 5), (px - 10, py)],
                                 dxfattribs={"layer": "焊接符号"})
@@ -311,7 +287,6 @@ class Sheet:
         self.pt(px + 4.5, py + 9, f"h={k}", 2.4, align=ML)
 
     def sec_mark(self, letter, x, y, vert=True):
-        """剖切符号(模型坐标定位, 符号大小按纸面)"""
         px, py = self.v(x, y)
         if vert:
             self.pl((px, py - 6), (px, py + 6), "粗实线")
@@ -321,10 +296,72 @@ class Sheet:
             self.pt(px, py + 4, letter, 3.6)
 
     def view_label(self, x, y, txt):
-        """视图名称(纸面坐标)"""
         self.pt(x, y, txt, 4.2)
 
-    # ================= 输出 =================
+    # ====== v3 新增专业标注 ======
+    def roughness(self, x, y, value=3.2, direction="up"):
+        px, py = self.v(x, y)
+        s = 3.0
+        if direction == "up":
+            p1 = (px - s, py - s * 1.5); p2 = (px + s, py - s * 1.5); p3 = (px, py)
+        else:
+            p1 = (px - s, py + s * 1.5); p2 = (px + s, py + s * 1.5); p3 = (px, py)
+        self.msp.add_lwpolyline([p1, p2, p3], close=False, dxfattribs={"layer": "尺寸线"})
+        ty = py + s * 2.2 if direction == "up" else py - s * 2.2
+        self.pt(px, ty, f"Ra {value}", 2.2)
+
+    def gd_tolerance(self, x, y, symbol="⊥", value="0.5", datum="A"):
+        w1, w2, w3, h = 10, 14, 10, 5.0
+        for i, w in enumerate([w1, w2, w3]):
+            self.prect(x + sum([w1, w2, w3][:i]), y, w, h, "表格线")
+        self.pt(x + w1 / 2, y + h / 2, symbol, 2.6)
+        self.pt(x + w1 + w2 / 2, y + h / 2, value, 2.4)
+        self.pt(x + w1 + w2 + w3 / 2, y + h / 2, datum, 2.4)
+
+    def dim_h_tol(self, x1, x2, y, d=10.0, txt=None, tol="+0.5/-0.3"):
+        self.dim_h(x1, x2, y, d, txt)
+        px1, py = self.v(x1, y); px2, _ = self.v(x2, y)
+        s = -1.0 if d > 0 else 1.0
+        yl = py + s * abs(d)
+        self.pt((px1 + px2) / 2 + 12, yl - 1.0, tol, 1.8, align=ML)
+
+    def dim_v_tol(self, y1, y2, x, d=10.0, txt=None, tol="+0.5/-0.3"):
+        self.dim_v(y1, y2, x, d, txt)
+        px, py1 = self.v(x, y1); _, py2 = self.v(x, y2)
+        s = -1.0 if d > 0 else 1.0
+        xl = px + s * abs(d)
+        self.pt(xl - 4, (py1 + py2) / 2 + 5, tol, 1.8, align=MR)
+
+    def datum_box(self, x, y, letter="A"):
+        s = 5.0
+        self.prect(x, y, s, s, "表格线")
+        self.pt(x + s / 2, y + s / 2, letter, 2.6)
+        px, py = x + s / 2, y
+        self.msp.add_lwpolyline([(px - 2, py), (px + 2, py), (px, py - 3)],
+                                close=False, dxfattribs={"layer": "尺寸线"})
+
+    def bolt_circle(self, cx, cy, r, n=8, hole_r=11):
+        self.mcirc(cx, cy, r, "中心线", "CENTER")
+        for i in range(n):
+            ang = 2 * math.pi * i / n
+            hx = cx + r * math.cos(ang)
+            hy = cy + r * math.sin(ang)
+            self.mcirc(hx, hy, hole_r)
+        self.mcline(cx - r - 30, cy, cx + r + 30, cy)
+        self.mcline(cx, cy - r - 30, cx, cy + r + 30)
+
+    def weld_full(self, x, y, k=6, wtype="角焊"):
+        px, py = self.v(x, y)
+        self.msp.add_line((px - 20, py), (px + 20, py), dxfattribs={"layer": "焊接符号"})
+        self.msp.add_lwpolyline([(px - 5, py), (px, py + 6), (px + 5, py)],
+                                close=False, dxfattribs={"layer": "焊接符号"})
+        self.pt(px + 8, py + 3, f"h={k}", 2.0, align=ML)
+        self.pt(px - 12, py + 3, wtype, 2.0, align=MR)
+
+    def rev_center(self, x, y, w, h):
+        self.mcline(x - 20, y + h / 2, x + w + 20, y + h / 2)
+        self.mcline(x + w / 2, y - 20, x + w / 2, y + h + 20)
+
     def save(self, path):
         self.doc.saveas(path)
 
@@ -340,7 +377,6 @@ class Sheet:
         fig = plt.figure(figsize=(self.W / 25.4, self.H / 25.4), dpi=dpi)
         ax = fig.add_axes([0, 0, 1, 1])
         ax.set_facecolor("#ffffff")
-        # 预览渲染: simfang 含复合字形, ezdxf 提取路径会错乱 -> 换微软雅黑渲染
         st = self.doc.styles.get("HZ")
         orig_font = st.dxf.font
         st.dxf.font = "msyh.ttc"
